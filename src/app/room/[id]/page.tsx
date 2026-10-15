@@ -28,7 +28,7 @@ type Entry = {
 // 参加者同士で送り合うデータ(Agoraのデータストリーム、1件1KBまで)
 type Wire =
   | { t: "hello"; name: string; lang: Lang; sharing: boolean }
-  | { t: "say"; id: string; name: string; lang: Lang; text: string }
+  | { t: "say"; id: string; name: string; lang: Lang; text: string; ts?: number; past?: boolean }
   | { t: "share"; on: boolean };
 
 type StreamClient = { sendStreamMessage: (p: string | Uint8Array, retry?: boolean) => Promise<void> };
@@ -42,6 +42,7 @@ type SR = {
 
 const PREF_KEY = "agora-meet:profile";
 const CHUNK = 250; // 1KB制限に収めるための1回あたりの文字数
+const RESEND = 30; // 途中参加者へ送り直す自分の発言数
 
 function splitText(s: string): string[] {
   const out: string[] = [];
@@ -185,6 +186,15 @@ function Meeting({
     send({ t: "hello", name, lang, sharing: sharingRef.current });
   }, [send, name, lang]);
 
+  // 途中参加・再読み込みした人のために、自分の直近の発言を少しずつ送り直す
+  const resendMine = useCallback(async () => {
+    const mine = entriesRef.current.filter((e) => e.mine).slice(-RESEND);
+    for (const e of mine) {
+      await send({ t: "say", id: e.id, name: e.name, lang: e.lang, text: e.original, ts: e.ts, past: true });
+      await new Promise((r) => setTimeout(r, 300)); // 送信量の上限に当たらないよう間隔をあける
+    }
+  }, [send]);
+
   // ===== 翻訳 =====
   const translate = useCallback(async (entry: Entry) => {
     const context = entriesRef.current
@@ -208,12 +218,18 @@ function Meeting({
 
   // 受信した発言をログに追加
   const receiveSay = useCallback((uid: number, msg: Extract<Wire, { t: "say" }>) => {
+    // 送り直しで同じ発言が届いた場合は無視
+    if (entriesRef.current.some((e) => e.id === msg.id)) return;
     const needs = msg.lang !== lang;
     const entry: Entry = {
       id: msg.id, uid, name: msg.name, lang: msg.lang, original: msg.text,
-      pending: needs, translated: needs ? undefined : msg.text, mine: false, ts: Date.now(),
+      pending: needs, translated: needs ? undefined : msg.text, mine: false, ts: msg.ts || Date.now(),
     };
-    updateEntries((prev) => (prev.some((e) => e.id === entry.id) ? prev : [...prev, entry]));
+    updateEntries((prev) => (prev.some((e) => e.id === entry.id) ? prev : [...prev, entry].sort((a, b) => a.ts - b.ts)));
+    if (msg.past) {
+      if (needs) translate(entry);
+      return;
+    }
     // 字幕は最新3件まで。同じ人の古い字幕は新しいものに置き換える
     setCaptions((cs) => [...cs.filter((c) => c.uid !== uid), entry].slice(-3));
     setTimeout(() => setCaptions((cs) => cs.filter((c) => c.id !== entry.id)), 10000);
@@ -228,7 +244,7 @@ function Meeting({
       const id = `${uidRef.current}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
       const entry: Entry = { id, uid: uidRef.current, name, lang, original: part, translated: part, mine: true, ts: Date.now() };
       updateEntries((prev) => [...prev, entry]);
-      send({ t: "say", id, name, lang, text: part });
+      send({ t: "say", id, name, lang, text: part, ts: entry.ts });
     }
   }, [name, lang, send, updateEntries]);
 
@@ -301,8 +317,9 @@ function Meeting({
 
         client.on("user-joined", (u: IAgoraRTCRemoteUser) => {
           upsertPeer(Number(u.uid), {});
-          // 新しく来た人に自分の名前を知らせる
+          // 新しく来た人に自分の名前とこれまでの発言を知らせる
           setTimeout(() => sayHello(), 800);
+          setTimeout(() => { resendMine(); }, 1500);
         });
         client.on("user-left", (u: IAgoraRTCRemoteUser) => {
           playedFit.current.delete(Number(u.uid));
