@@ -523,8 +523,10 @@ function Meeting({
     try {
       const { upload } = await import("@vercel/blob/client");
       const safe = f.name.replace(/[\\/?#%]+/g, "_").slice(-80);
-      const blob = await upload(`agora/${room}/${safe}`, f, { access: "public", handleUploadUrl: "/api/upload" });
-      shareFile({ name: f.name.slice(-80), url: blob.url, size: f.size, type: f.type || "" });
+      // 非公開で保存し、アプリ経由(/api/file)でだけ開けるようにする
+      const blob = await upload(`agora/${room}/${safe}`, f, { access: "private", handleUploadUrl: "/api/upload" });
+      const fname = f.name.slice(-80);
+      shareFile({ name: fname, url: `/api/file?p=${encodeURIComponent(blob.pathname)}&n=${encodeURIComponent(fname)}`, size: f.size, type: f.type || "" });
     } catch (e) {
       setBanner(`${L.uploadFailed}${e instanceof Error ? `: ${e.message}` : ""}`);
     } finally {
@@ -537,7 +539,7 @@ function Meeting({
     const lines = entriesRef.current.map((e) => {
       const head = `[${fmtTime(e.ts)}] ${e.name} (${e.lang})`;
       const body = e.kind === "file" && e.file
-        ? `[${L.fileTag}] ${e.file.name} ${e.file.url}`
+        ? `[${L.fileTag}] ${e.file.name} ${new URL(e.file.url, window.location.origin).href}`
         : `${e.kind === "chat" ? `[${L.chatTag}] ` : ""}${e.mine || e.lang === lang ? e.original : `${e.translated ?? ""}\n    原文: ${e.original}`}`;
       return `${head}\n    ${body}`;
     });
@@ -609,7 +611,7 @@ function Meeting({
                 {e.kind === "chat" && <span className="tag">{L.chatTag}</span>}
               </div>
               {e.kind === "file" && e.file ? (
-                <a className="file" href={e.file.url} target="_blank" rel="noreferrer" download={e.file.name}>
+                <a className="file" href={e.file.url} target="_blank" rel="noreferrer">
                   {e.file.type.startsWith("image/") && <img src={e.file.url} alt="" />}
                   <span className="fname">📎 {e.file.name}</span>
                   <span className="fsize">{fmtSize(e.file.size)}</span>

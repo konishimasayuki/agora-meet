@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 
-const NAMES: Record<string, string> = { ja: "Japanese", tr: "Turkish", en: "English" };
+const NAMES: Record<string, string> = { ja: "Japanese", tr: "Turkish", en: "English", zh: "Simplified Chinese" };
 // 速いモデルから順に試す
 const MODELS = ["claude-haiku-5-5", "claude-sonnet-4-5"];
 
@@ -21,7 +21,8 @@ Translate the speaker's utterance from ${NAMES[from] ?? from} into ${NAMES[to] ?
 - Output ONLY the translation. No quotes, notes, or explanations.
 - The text comes from speech recognition and may contain recognition errors or lack punctuation. Infer the intended meaning from context and translate naturally.
 - Keep these names as-is: BenelOil, Agora, Claude, GitHub, Vercel, App Store, Google Play, Oguz, Konishi.
-- Use polite business tone (Japanese: です/ます).`;
+- Use polite business tone (Japanese: です/ます).
+- Chinese output must be Simplified Chinese.`;
 
     const ctx = (context ?? []).slice(-6).join("\n");
     const content = ctx

@@ -1,9 +1,10 @@
-export type Lang = "ja" | "tr" | "en";
+export type Lang = "ja" | "tr" | "en" | "zh";
 
 export const LANGS: { code: Lang; label: string; sr: string }[] = [
   { code: "ja", label: "日本語", sr: "ja-JP" },
   { code: "tr", label: "Türkçe", sr: "tr-TR" },
   { code: "en", label: "English", sr: "en-US" },
+  { code: "zh", label: "中文", sr: "zh-CN" },
 ];
 
 const dict = {
@@ -115,6 +116,42 @@ const dict = {
     chatTag: "Chat",
     fileTag: "File",
   },
+  zh: {
+    tagline: "说出的话会以对方的语言显示为字幕的视频会议",
+    roomName: "会议室名称",
+    createRoom: "创建会议室",
+    yourName: "您的名字",
+    yourLang: "您说的语言",
+    join: "加入",
+    joining: "连接中…",
+    mic: "麦克风",
+    cam: "摄像头",
+    share: "共享屏幕",
+    stopShare: "停止共享",
+    leave: "离开",
+    log: "对话记录",
+    download: "保存记录",
+    copyLink: "复制邀请链接",
+    copied: "已复制",
+    emptyLog: "开始说话后，原文和译文会显示在这里。",
+    listening: "正在聆听",
+    micOff: "麦克风已关闭",
+    noSr: "此浏览器不支持语音识别。请在电脑上使用 Google Chrome 打开。",
+    noShare: "此设备不支持屏幕共享。请在电脑上使用 Chrome 共享。",
+    translating: "翻译中…",
+    waiting: "正在等待其他人加入",
+    you: "您",
+    left: "您已离开会议",
+    rejoin: "重新加入",
+    tip: "一句一句地说，翻译会更准确。",
+    chatPlaceholder: "输入消息（会翻译成对方的语言）",
+    send: "发送",
+    attach: "添加文件",
+    uploading: "上传中…",
+    uploadFailed: "文件上传失败",
+    chatTag: "消息",
+    fileTag: "文件",
+  },
 };
 
 export type Dict = (typeof dict)["ja"];
@@ -125,5 +162,6 @@ export function guessLang(): Lang {
   const l = navigator.language.toLowerCase();
   if (l.startsWith("tr")) return "tr";
   if (l.startsWith("ja")) return "ja";
+  if (l.startsWith("zh")) return "zh";
   return "en";
 }
