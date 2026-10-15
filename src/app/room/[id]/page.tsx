@@ -48,6 +48,10 @@ function splitText(s: string): string[] {
   for (let i = 0; i < s.length; i += CHUNK) out.push(s.slice(i, i + CHUNK));
   return out;
 }
+// 参加者ごとの色(ログ・字幕・名前で共通)
+const COLORS = ["#A9B98E", "#E2A77F", "#8FB8D6", "#D7A5C4", "#E3CF7E", "#9FD1C2"];
+const colorOf = (uid: number) => COLORS[uid % COLORS.length];
+
 const fmtTime = (ts: number) => new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 
 export default function RoomPage() {
@@ -151,7 +155,8 @@ function Meeting({
   const [srSupported, setSrSupported] = useState(true);
   const [banner, setBanner] = useState("");
   const [copied, setCopied] = useState(false);
-  const [caption, setCaption] = useState<Entry | null>(null);
+  const [captions, setCaptions] = useState<Entry[]>([]);
+  const [speaking, setSpeaking] = useState<Set<number>>(new Set());
 
   // 他の箇所から最新の状態を参照するため
   const sharingRef = useRef(false);
@@ -195,7 +200,7 @@ function Meeting({
       const data = await res.json();
       const translated = res.ok ? data.text : `(${data.error || "翻訳エラー"})`;
       updateEntries((prev) => prev.map((e) => (e.id === entry.id ? { ...e, translated, pending: false } : e)));
-      setCaption((c) => (c && c.id === entry.id ? { ...c, translated, pending: false } : c));
+      setCaptions((cs) => cs.map((c) => (c.id === entry.id ? { ...c, translated, pending: false } : c)));
     } catch {
       updateEntries((prev) => prev.map((e) => (e.id === entry.id ? { ...e, translated: "(翻訳エラー)", pending: false } : e)));
     }
@@ -209,7 +214,9 @@ function Meeting({
       pending: needs, translated: needs ? undefined : msg.text, mine: false, ts: Date.now(),
     };
     updateEntries((prev) => (prev.some((e) => e.id === entry.id) ? prev : [...prev, entry]));
-    setCaption(entry);
+    // 字幕は最新3件まで。同じ人の古い字幕は新しいものに置き換える
+    setCaptions((cs) => [...cs.filter((c) => c.uid !== uid), entry].slice(-3));
+    setTimeout(() => setCaptions((cs) => cs.filter((c) => c.id !== entry.id)), 10000);
     if (needs) translate(entry);
   }, [lang, translate, updateEntries]);
 
@@ -278,6 +285,10 @@ function Meeting({
         AgoraRTC.setLogLevel(3);
         const client = AgoraRTC.createClient({ mode: "rtc", codec: "vp8" });
         clientRef.current = client;
+        client.enableAudioVolumeIndicator();
+        client.on("volume-indicator", (vols: { uid: UID; level: number }[]) => {
+          setSpeaking(new Set(vols.filter((v) => v.level > 5).map((v) => (Number(v.uid) === 0 ? uidRef.current : Number(v.uid)))));
+        });
 
         const upsertPeer = (uid: number, patch: Partial<Peer>) =>
           setPeers((prev) => {
@@ -393,13 +404,6 @@ function Meeting({
     logEnd.current?.scrollIntoView({ block: "end" });
   }, [entries.length, interim]);
 
-  // 字幕は10秒で消す
-  useEffect(() => {
-    if (!caption) return;
-    const id = setTimeout(() => setCaption(null), 10000);
-    return () => clearTimeout(id);
-  }, [caption]);
-
   // ===== 操作 =====
   const toggleMic = async () => {
     const m = micRef.current;
@@ -485,19 +489,21 @@ function Meeting({
   };
 
   const anySharing = sharing || peers.some((p) => p.sharing);
+  const count = peers.length + 1;
+  const myUid = uidRef.current;
   const initial = (s: string) => (s || "?").slice(0, 1).toUpperCase();
 
   return (
     <main className="room">
       <section className="stage">
-        <div className={`grid${anySharing ? " has-share" : ""}`}>
-          <div className={`tile${sharing ? " sharing" : ""}`}>
+        <div className={`grid n${Math.min(count, 4)}${anySharing ? " has-share" : ""}`}>
+          <div className={`tile${sharing ? " sharing" : ""}${speaking.has(myUid) && micOn ? " talking" : ""}`} style={{ ["--c" as string]: colorOf(myUid) }}>
             {(!hasCam || !camOn) && !sharing && <div className="ph"><b>{initial(name)}</b></div>}
             <div className="vid" ref={localEl} style={{ visibility: (hasCam && camOn) || sharing ? "visible" : "hidden" }} />
             <span className="who">{name}（{L.you}）{!micOn && " · 🔇"}</span>
           </div>
           {peers.map((p) => (
-            <div key={p.uid} className={`tile${p.sharing ? " sharing" : ""}`}>
+            <div key={p.uid} className={`tile${p.sharing ? " sharing" : ""}${speaking.has(p.uid) ? " talking" : ""}`} style={{ ["--c" as string]: colorOf(p.uid) }}>
               <div className="ph"><b>{initial(p.name)}</b></div>
               <div className="vid" id={`tile-${p.uid}`} />
               <span className="who">{p.name || "…"}</span>
@@ -505,10 +511,14 @@ function Meeting({
           ))}
         </div>
         {peers.length === 0 && <p className="waiting">{L.waiting}</p>}
-        {caption && (
-          <div className="caption" aria-live="polite">
-            <small>{caption.name}</small>
-            {caption.pending ? L.translating : caption.translated}
+        {captions.length > 0 && (
+          <div className="captions" aria-live="polite">
+            {captions.map((c) => (
+              <div key={c.id} className="caption">
+                <small style={{ color: colorOf(c.uid) }}>{c.name}</small>
+                {c.pending ? L.translating : c.translated}
+              </div>
+            ))}
           </div>
         )}
       </section>
@@ -531,8 +541,8 @@ function Meeting({
         <div className="log">
           {entries.length === 0 && <p className="log-empty">{L.emptyLog}</p>}
           {entries.map((e) => (
-            <div key={e.id} className={`entry${e.mine ? " mine" : ""}`}>
-              <div className="meta"><b>{e.mine ? L.you : e.name}</b><span>{fmtTime(e.ts)}</span></div>
+            <div key={e.id} className={`entry${e.mine ? " mine" : ""}`} style={{ ["--c" as string]: colorOf(e.uid) }}>
+              <div className="meta"><b style={{ color: colorOf(e.uid) }}>{e.mine ? L.you : e.name}</b><span>{fmtTime(e.ts)}</span></div>
               {e.mine || e.lang === lang ? (
                 <div className="main">{e.original}</div>
               ) : (
