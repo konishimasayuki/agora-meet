@@ -24,11 +24,15 @@ type Entry = {
   pending?: boolean;
   mine: boolean;
   ts: number;
+  kind?: Kind;
+  file?: FileInfo;
 };
+type Kind = "voice" | "chat" | "file";
+type FileInfo = { name: string; url: string; size: number; type: string };
 // 参加者同士で送り合うデータ(Agoraのデータストリーム、1件1KBまで)
 type Wire =
   | { t: "hello"; name: string; lang: Lang; sharing: boolean }
-  | { t: "say"; id: string; name: string; lang: Lang; text: string; ts?: number; past?: boolean }
+  | { t: "say"; id: string; name: string; lang: Lang; text: string; ts?: number; past?: boolean; kind?: Kind; file?: FileInfo }
   | { t: "share"; on: boolean };
 
 type StreamClient = { sendStreamMessage: (p: string | Uint8Array, retry?: boolean) => Promise<void> };
@@ -52,6 +56,9 @@ function splitText(s: string): string[] {
 // 参加者ごとの色(ログ・字幕・名前で共通)
 const COLORS = ["#A9B98E", "#E2A77F", "#8FB8D6", "#D7A5C4", "#E3CF7E", "#9FD1C2"];
 const colorOf = (uid: number) => COLORS[uid % COLORS.length];
+
+const fmtSize = (n: number) =>
+  n < 1024 ? `${n} B` : n < 1024 * 1024 ? `${(n / 1024).toFixed(0)} KB` : `${(n / 1024 / 1024).toFixed(1)} MB`;
 
 const fmtTime = (ts: number) => new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 
@@ -153,6 +160,9 @@ function Meeting({
   const [sharing, setSharing] = useState(false);
   const [entries, setEntries] = useState<Entry[]>([]);
   const [interim, setInterim] = useState("");
+  const [draft, setDraft] = useState("");
+  const [uploading, setUploading] = useState<string | null>(null);
+  const fileInput = useRef<HTMLInputElement | null>(null);
   const [srSupported, setSrSupported] = useState(true);
   const [banner, setBanner] = useState("");
   const [copied, setCopied] = useState(false);
@@ -190,7 +200,7 @@ function Meeting({
   const resendMine = useCallback(async () => {
     const mine = entriesRef.current.filter((e) => e.mine).slice(-RESEND);
     for (const e of mine) {
-      await send({ t: "say", id: e.id, name: e.name, lang: e.lang, text: e.original, ts: e.ts, past: true });
+      await send({ t: "say", id: e.id, name: e.name, lang: e.lang, text: e.original, ts: e.ts, past: true, kind: e.kind, file: e.file });
       await new Promise((r) => setTimeout(r, 300)); // 送信量の上限に当たらないよう間隔をあける
     }
   }, [send]);
@@ -220,10 +230,11 @@ function Meeting({
   const receiveSay = useCallback((uid: number, msg: Extract<Wire, { t: "say" }>) => {
     // 送り直しで同じ発言が届いた場合は無視
     if (entriesRef.current.some((e) => e.id === msg.id)) return;
-    const needs = msg.lang !== lang;
+    const needs = msg.lang !== lang && msg.kind !== "file";
     const entry: Entry = {
       id: msg.id, uid, name: msg.name, lang: msg.lang, original: msg.text,
       pending: needs, translated: needs ? undefined : msg.text, mine: false, ts: msg.ts || Date.now(),
+      kind: msg.kind || "voice", file: msg.file,
     };
     updateEntries((prev) => (prev.some((e) => e.id === entry.id) ? prev : [...prev, entry].sort((a, b) => a.ts - b.ts)));
     if (msg.past) {
@@ -231,21 +242,30 @@ function Meeting({
       return;
     }
     // 字幕は最新3件まで。同じ人の古い字幕は新しいものに置き換える
+    if (entry.kind === "file") return; // ファイルは字幕に出さずログだけ
     setCaptions((cs) => [...cs.filter((c) => c.uid !== uid), entry].slice(-3));
     setTimeout(() => setCaptions((cs) => cs.filter((c) => c.id !== entry.id)), 10000);
     if (needs) translate(entry);
   }, [lang, translate, updateEntries]);
 
   // 自分の発言を送る
-  const speak = useCallback((text: string) => {
+  const speak = useCallback((text: string, kind: Kind = "voice") => {
     const clean = text.trim();
     if (!clean) return;
     for (const part of splitText(clean)) {
       const id = `${uidRef.current}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
-      const entry: Entry = { id, uid: uidRef.current, name, lang, original: part, translated: part, mine: true, ts: Date.now() };
+      const entry: Entry = { id, uid: uidRef.current, name, lang, original: part, translated: part, mine: true, ts: Date.now(), kind };
       updateEntries((prev) => [...prev, entry]);
-      send({ t: "say", id, name, lang, text: part, ts: entry.ts });
+      send({ t: "say", id, name, lang, text: part, ts: entry.ts, kind });
     }
+  }, [name, lang, send, updateEntries]);
+
+  // ファイルを共有(アップロード後にURLを送る)
+  const shareFile = useCallback((file: FileInfo) => {
+    const id = `${uidRef.current}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    const entry: Entry = { id, uid: uidRef.current, name, lang, original: file.name, translated: file.name, mine: true, ts: Date.now(), kind: "file", file };
+    updateEntries((prev) => [...prev, entry]);
+    send({ t: "say", id, name, lang, text: file.name, ts: entry.ts, kind: "file", file });
   }, [name, lang, send, updateEntries]);
 
   // ===== 音声認識 =====
@@ -263,7 +283,7 @@ function Meeting({
       let live = "";
       for (let i = e.resultIndex; i < e.results.length; i++) {
         const r = e.results[i];
-        if (r.isFinal) speak(r[0].transcript);
+        if (r.isFinal) speak(r[0].transcript, "voice");
         else live += r[0].transcript;
       }
       setInterim(live);
@@ -491,10 +511,34 @@ function Meeting({
     } catch {}
   };
 
+  const sendChat = () => {
+    if (!draft.trim()) return;
+    speak(draft, "chat");
+    setDraft("");
+  };
+
+  const attach = async (f: File) => {
+    setUploading(f.name);
+    setBanner("");
+    try {
+      const { upload } = await import("@vercel/blob/client");
+      const safe = f.name.replace(/[\\/?#%]+/g, "_").slice(-80);
+      const blob = await upload(`agora/${room}/${safe}`, f, { access: "public", handleUploadUrl: "/api/upload" });
+      shareFile({ name: f.name.slice(-80), url: blob.url, size: f.size, type: f.type || "" });
+    } catch (e) {
+      setBanner(`${L.uploadFailed}${e instanceof Error ? `: ${e.message}` : ""}`);
+    } finally {
+      setUploading(null);
+      if (fileInput.current) fileInput.current.value = "";
+    }
+  };
+
   const download = () => {
     const lines = entriesRef.current.map((e) => {
       const head = `[${fmtTime(e.ts)}] ${e.name} (${e.lang})`;
-      const body = e.mine || e.lang === lang ? e.original : `${e.translated ?? ""}\n    原文: ${e.original}`;
+      const body = e.kind === "file" && e.file
+        ? `[${L.fileTag}] ${e.file.name} ${e.file.url}`
+        : `${e.kind === "chat" ? `[${L.chatTag}] ` : ""}${e.mine || e.lang === lang ? e.original : `${e.translated ?? ""}\n    原文: ${e.original}`}`;
       return `${head}\n    ${body}`;
     });
     const blob = new Blob([`Agora ${room} ${new Date().toLocaleString()}\n\n${lines.join("\n\n")}\n`], { type: "text/plain;charset=utf-8" });
@@ -559,8 +603,18 @@ function Meeting({
           {entries.length === 0 && <p className="log-empty">{L.emptyLog}</p>}
           {entries.map((e) => (
             <div key={e.id} className={`entry${e.mine ? " mine" : ""}`} style={{ ["--c" as string]: colorOf(e.uid) }}>
-              <div className="meta"><b style={{ color: colorOf(e.uid) }}>{e.mine ? L.you : e.name}</b><span>{fmtTime(e.ts)}</span></div>
-              {e.mine || e.lang === lang ? (
+              <div className="meta">
+                <b style={{ color: colorOf(e.uid) }}>{e.mine ? L.you : e.name}</b>
+                <span>{fmtTime(e.ts)}</span>
+                {e.kind === "chat" && <span className="tag">{L.chatTag}</span>}
+              </div>
+              {e.kind === "file" && e.file ? (
+                <a className="file" href={e.file.url} target="_blank" rel="noreferrer" download={e.file.name}>
+                  {e.file.type.startsWith("image/") && <img src={e.file.url} alt="" />}
+                  <span className="fname">📎 {e.file.name}</span>
+                  <span className="fsize">{fmtSize(e.file.size)}</span>
+                </a>
+              ) : e.mine || e.lang === lang ? (
                 <div className="main">{e.original}</div>
               ) : (
                 <>
@@ -574,6 +628,30 @@ function Meeting({
         </div>
         <div className="interim">
           {micOn ? (<><i />{interim || L.listening}</>) : L.micOff}
+        </div>
+        <div className="composer">
+          <input
+            ref={fileInput}
+            type="file"
+            hidden
+            onChange={(e) => { const f = e.target.files?.[0]; if (f) attach(f); }}
+          />
+          <button className="clip" onClick={() => fileInput.current?.click()} disabled={!!uploading} aria-label={L.attach} title={L.attach}>📎</button>
+          <textarea
+            className="chat-input"
+            rows={1}
+            value={draft}
+            placeholder={uploading ? `${L.uploading} ${uploading}` : L.chatPlaceholder}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => {
+              // 日本語変換中のEnterでは送らない
+              if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+                e.preventDefault();
+                sendChat();
+              }
+            }}
+          />
+          <button className="send" onClick={sendChat} disabled={!draft.trim()}>{L.send}</button>
         </div>
       </aside>
     </main>

@@ -85,6 +85,20 @@ button { cursor: pointer; }
 .ctl.leave { background: var(--danger); border-color: var(--danger); color: #fff; }
 .banner { background: var(--raise); border: 1px solid var(--clay); color: var(--text); border-radius: 10px; padding: 8px 12px; font-size: 13px; margin: 0 12px; }
 
+.tag { font-size: 11px; border: 1px solid var(--line); border-radius: 6px; padding: 0 6px; color: var(--soft); }
+.file { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; margin-top: 4px; padding: 8px 10px; border-radius: 10px; background: var(--raise); color: var(--text); text-decoration: none; }
+.file:hover { outline: 1px solid var(--c, var(--olive)); }
+.file img { display: block; width: 100%; max-height: 200px; object-fit: contain; border-radius: 6px; background: var(--bg); }
+.file .fname { font-size: 14px; word-break: break-all; }
+.file .fsize { font-size: 12px; color: var(--mute); }
+.composer { display: flex; gap: 6px; align-items: flex-end; padding: 10px 12px 12px; border-top: 1px solid var(--line); }
+.chat-input { flex: 1; resize: none; min-height: 40px; max-height: 120px; padding: 9px 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--bg); outline: none; font-size: 14px; line-height: 1.5; field-sizing: content; }
+.chat-input:focus { border-color: var(--olive); }
+.clip, .send { height: 40px; border-radius: 10px; border: 1px solid var(--line); background: var(--raise); padding: 0 12px; }
+.clip { font-size: 18px; padding: 0 10px; }
+.send { background: var(--olive); color: var(--olive-ink); border-color: var(--olive); font-weight: 700; }
+.send:disabled, .clip:disabled { opacity: .45; cursor: default; }
+
 @media (max-width: 860px) {
   .room { grid-template-columns: 1fr; grid-template-rows: auto auto 1fr; height: auto; min-height: 100dvh; }
   .stage { order: 1; }
